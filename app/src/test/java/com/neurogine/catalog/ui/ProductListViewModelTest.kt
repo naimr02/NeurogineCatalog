@@ -3,6 +3,7 @@ package com.neurogine.catalog.ui
 import com.neurogine.catalog.data.model.Product
 import com.neurogine.catalog.data.model.ProductResponse
 import com.neurogine.catalog.data.repository.ProductRepository
+import com.neurogine.catalog.ui.screens.list.ProductListUiState
 import com.neurogine.catalog.ui.screens.list.ProductListViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -17,6 +18,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ProductListViewModelTest {
@@ -43,7 +45,7 @@ class ProductListViewModelTest {
     )
 
     @Test
-    fun loadInitialProducts_success_updatesProductsAndFlags() = runTest(testDispatcher) {
+    fun loadInitialProducts_success_emitsSuccessState() = runTest(testDispatcher) {
         val page1Products = (1..20).map { createProduct(it) }
         val fakeRepo = object : ProductRepository {
             override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> =
@@ -56,18 +58,19 @@ class ProductListViewModelTest {
         val viewModel = ProductListViewModel(repository = fakeRepo)
         advanceUntilIdle()
 
-        assertEquals(20, viewModel.products.value.size)
-        assertFalse(viewModel.isLoading.value)
-        assertFalse(viewModel.isPaginating.value)
-        assertFalse(viewModel.endReached.value)
+        val state = viewModel.uiState.value
+        assertTrue(state is ProductListUiState.Success)
+        val successState = state as ProductListUiState.Success
+        assertEquals(20, successState.products.size)
+        assertFalse(successState.isPaginating)
+        assertFalse(successState.endReached)
     }
 
     @Test
-    fun loadInitialProducts_endReached_whenLessThanPageSize() = runTest(testDispatcher) {
-        val products = (1..5).map { createProduct(it) }
+    fun loadInitialProducts_empty_emitsEmptyState() = runTest(testDispatcher) {
         val fakeRepo = object : ProductRepository {
             override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> =
-                Result.success(ProductResponse(products = products, total = 5, skip = 0, limit = 20))
+                Result.success(ProductResponse(products = emptyList(), total = 0, skip = 0, limit = 20))
 
             override suspend fun getProductById(id: Int): Result<Product> = Result.failure(Exception())
             override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
@@ -76,8 +79,55 @@ class ProductListViewModelTest {
         val viewModel = ProductListViewModel(repository = fakeRepo)
         advanceUntilIdle()
 
-        assertEquals(5, viewModel.products.value.size)
-        assertTrue(viewModel.endReached.value)
+        assertTrue(viewModel.uiState.value is ProductListUiState.Empty)
+    }
+
+    @Test
+    fun loadInitialProducts_failure_emitsErrorState() = runTest(testDispatcher) {
+        val fakeRepo = object : ProductRepository {
+            override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> =
+                Result.failure(IOException("Network disconnected"))
+
+            override suspend fun getProductById(id: Int): Result<Product> = Result.failure(Exception())
+            override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
+        }
+
+        val viewModel = ProductListViewModel(repository = fakeRepo)
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state is ProductListUiState.Error)
+        assertEquals("Network disconnected", (state as ProductListUiState.Error).message)
+    }
+
+    @Test
+    fun retry_reloadsInitialProducts() = runTest(testDispatcher) {
+        var shouldFail = true
+        val products = listOf(createProduct(1))
+        val fakeRepo = object : ProductRepository {
+            override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> {
+                return if (shouldFail) {
+                    Result.failure(IOException("Server error"))
+                } else {
+                    Result.success(ProductResponse(products = products, total = 1, skip = 0, limit = 20))
+                }
+            }
+
+            override suspend fun getProductById(id: Int): Result<Product> = Result.failure(Exception())
+            override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
+        }
+
+        val viewModel = ProductListViewModel(repository = fakeRepo)
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value is ProductListUiState.Error)
+
+        shouldFail = false
+        viewModel.retry()
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertTrue(state is ProductListUiState.Success)
+        assertEquals(1, (state as ProductListUiState.Success).products.size)
     }
 
     @Test
@@ -101,26 +151,30 @@ class ProductListViewModelTest {
         val viewModel = ProductListViewModel(repository = fakeRepo)
         advanceUntilIdle()
 
-        assertEquals(20, viewModel.products.value.size)
-        assertFalse(viewModel.endReached.value)
+        val state1 = viewModel.uiState.value as ProductListUiState.Success
+        assertEquals(20, state1.products.size)
+        assertFalse(state1.endReached)
 
         viewModel.loadNextPage()
         advanceUntilIdle()
 
-        assertEquals(35, viewModel.products.value.size)
-        assertTrue(viewModel.endReached.value)
-        assertFalse(viewModel.isPaginating.value)
+        val state2 = viewModel.uiState.value as ProductListUiState.Success
+        assertEquals(35, state2.products.size)
+        assertTrue(state2.endReached)
+        assertFalse(state2.isPaginating)
     }
 
     @Test
-    fun loadNextPage_guarded_whenEndReached() = runTest(testDispatcher) {
-        var callCount = 0
-        val page1Products = (1..10).map { createProduct(it) }
+    fun loadNextPage_failure_preservesExistingProducts() = runTest(testDispatcher) {
+        val page1Products = (1..20).map { createProduct(it) }
 
         val fakeRepo = object : ProductRepository {
             override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> {
-                callCount++
-                return Result.success(ProductResponse(products = page1Products, total = 10, skip = 0, limit = 20))
+                return if (skip == 0) {
+                    Result.success(ProductResponse(products = page1Products, total = 50, skip = 0, limit = 20))
+                } else {
+                    Result.failure(IOException("Pagination failed"))
+                }
             }
 
             override suspend fun getProductById(id: Int): Result<Product> = Result.failure(Exception())
@@ -130,12 +184,11 @@ class ProductListViewModelTest {
         val viewModel = ProductListViewModel(repository = fakeRepo)
         advanceUntilIdle()
 
-        assertEquals(1, callCount)
-        assertTrue(viewModel.endReached.value)
-
         viewModel.loadNextPage()
         advanceUntilIdle()
 
-        assertEquals(1, callCount) // No second call
+        val state = viewModel.uiState.value as ProductListUiState.Success
+        assertEquals(20, state.products.size)
+        assertFalse(state.isPaginating)
     }
 }

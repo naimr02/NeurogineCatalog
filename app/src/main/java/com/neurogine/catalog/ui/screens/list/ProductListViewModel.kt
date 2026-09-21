@@ -2,7 +2,6 @@ package com.neurogine.catalog.ui.screens.list
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.neurogine.catalog.data.model.Product
 import com.neurogine.catalog.data.remote.ApiClient
 import com.neurogine.catalog.data.repository.ProductRepository
 import com.neurogine.catalog.data.repository.ProductRepositoryImpl
@@ -15,20 +14,8 @@ class ProductListViewModel(
     private val repository: ProductRepository = ProductRepositoryImpl(ApiClient.api)
 ) : ViewModel() {
 
-    private val _products = MutableStateFlow<List<Product>>(emptyList())
-    val products: StateFlow<List<Product>> = _products.asStateFlow()
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
-    private val _isPaginating = MutableStateFlow(false)
-    val isPaginating: StateFlow<Boolean> = _isPaginating.asStateFlow()
-
-    private val _endReached = MutableStateFlow(false)
-    val endReached: StateFlow<Boolean> = _endReached.asStateFlow()
-
-    private val _errorMessage = MutableStateFlow<String?>(null)
-    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+    private val _uiState = MutableStateFlow<ProductListUiState>(ProductListUiState.Loading)
+    val uiState: StateFlow<ProductListUiState> = _uiState.asStateFlow()
 
     init {
         loadInitialProducts()
@@ -36,41 +23,53 @@ class ProductListViewModel(
 
     fun loadInitialProducts() {
         viewModelScope.launch {
-            _isLoading.value = true
-            _errorMessage.value = null
-            _endReached.value = false
+            _uiState.value = ProductListUiState.Loading
 
             val result = repository.getProducts(limit = PAGE_SIZE, skip = 0)
             result.onSuccess { response ->
-                _products.value = response.products
-                _endReached.value = response.products.size < PAGE_SIZE || response.products.size >= response.total
+                if (response.products.isEmpty()) {
+                    _uiState.value = ProductListUiState.Empty
+                } else {
+                    val endReached = response.products.size < PAGE_SIZE || response.products.size >= response.total
+                    _uiState.value = ProductListUiState.Success(
+                        products = response.products,
+                        isPaginating = false,
+                        endReached = endReached
+                    )
+                }
             }.onFailure { throwable ->
-                _errorMessage.value = throwable.localizedMessage ?: "Failed to load products"
+                _uiState.value = ProductListUiState.Error(
+                    message = throwable.localizedMessage ?: "Unknown error occurred"
+                )
             }
-
-            _isLoading.value = false
         }
     }
 
+    fun retry() {
+        loadInitialProducts()
+    }
+
     fun loadNextPage() {
-        if (_isLoading.value || _isPaginating.value || _endReached.value) {
+        val currentState = _uiState.value
+        if (currentState !is ProductListUiState.Success || currentState.isPaginating || currentState.endReached) {
             return
         }
 
         viewModelScope.launch {
-            _isPaginating.value = true
-            val currentList = _products.value
-            val result = repository.getProducts(limit = PAGE_SIZE, skip = currentList.size)
+            _uiState.value = currentState.copy(isPaginating = true)
 
+            val result = repository.getProducts(limit = PAGE_SIZE, skip = currentState.products.size)
             result.onSuccess { response ->
-                val updatedList = currentList + response.products
-                _products.value = updatedList
-                _endReached.value = response.products.size < PAGE_SIZE || updatedList.size >= response.total
-            }.onFailure { throwable ->
-                _errorMessage.value = throwable.localizedMessage ?: "Failed to load more products"
+                val updatedProducts = currentState.products + response.products
+                val endReached = response.products.size < PAGE_SIZE || updatedProducts.size >= response.total
+                _uiState.value = currentState.copy(
+                    products = updatedProducts,
+                    isPaginating = false,
+                    endReached = endReached
+                )
+            }.onFailure {
+                _uiState.value = currentState.copy(isPaginating = false)
             }
-
-            _isPaginating.value = false
         }
     }
 
