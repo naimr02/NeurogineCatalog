@@ -35,4 +35,7 @@ object ApiClient {
             .build()
             .create(DummyJsonApi::class.java)
     }
+
+    val api: DummyJsonApi
+        get() = dummyJsonApi
 }
