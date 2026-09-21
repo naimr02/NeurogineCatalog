@@ -2,6 +2,7 @@ package com.neurogine.catalog.ui.screens.list
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +28,7 @@ import com.neurogine.catalog.ui.components.EmptyView
 import com.neurogine.catalog.ui.components.ErrorView
 import com.neurogine.catalog.ui.components.LoadingView
 import com.neurogine.catalog.ui.components.ProductCard
+import com.neurogine.catalog.ui.components.ProductSearchBar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -36,6 +38,7 @@ fun ProductListScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
     val lazyListState = rememberLazyListState()
 
     val shouldLoadMore = remember {
@@ -61,53 +64,71 @@ fun ProductListScreen(
         },
         modifier = modifier
     ) { innerPadding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            when (val state = uiState) {
-                is ProductListUiState.Loading -> {
-                    LoadingView()
-                }
+            ProductSearchBar(
+                query = searchQuery,
+                onQueryChange = { viewModel.onSearchQueryChanged(it) },
+                onClear = { viewModel.onSearchQueryChanged("") }
+            )
 
-                is ProductListUiState.Empty -> {
-                    EmptyView()
-                }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                when (val state = uiState) {
+                    is ProductListUiState.Loading -> {
+                        LoadingView()
+                    }
 
-                is ProductListUiState.Error -> {
-                    ErrorView(
-                        errorMessage = state.message,
-                        onRetry = { viewModel.retry() }
-                    )
-                }
+                    is ProductListUiState.Empty -> {
+                        EmptyView(
+                            message = if (searchQuery.isNotBlank()) {
+                                "No products found for \"$searchQuery\""
+                            } else {
+                                "No products available"
+                            }
+                        )
+                    }
 
-                is ProductListUiState.Success -> {
-                    LazyColumn(
-                        state = lazyListState,
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(
-                            items = state.products,
-                            key = { it.id }
-                        ) { product ->
-                            ProductCard(
-                                product = product,
-                                onClick = { onProductClick(product.id) }
-                            )
-                        }
+                    is ProductListUiState.Error -> {
+                        ErrorView(
+                            errorMessage = state.message,
+                            onRetry = { viewModel.retry() }
+                        )
+                    }
 
-                        if (state.isPaginating) {
-                            item {
-                                Box(
-                                    modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator()
+                    is ProductListUiState.Success -> {
+                        LazyColumn(
+                            state = lazyListState,
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(
+                                items = state.products,
+                                key = { it.id }
+                            ) { product ->
+                                ProductCard(
+                                    product = product,
+                                    onClick = { onProductClick(product.id) }
+                                )
+                            }
+
+                            if (state.isPaginating) {
+                                item {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator()
+                                    }
                                 }
                             }
                         }

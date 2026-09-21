@@ -5,11 +5,16 @@ import androidx.lifecycle.viewModelScope
 import com.neurogine.catalog.data.remote.ApiClient
 import com.neurogine.catalog.data.repository.ProductRepository
 import com.neurogine.catalog.data.repository.ProductRepositoryImpl
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
+@OptIn(FlowPreview::class)
 class ProductListViewModel(
     private val repository: ProductRepository = ProductRepositoryImpl(ApiClient.api)
 ) : ViewModel() {
@@ -17,8 +22,26 @@ class ProductListViewModel(
     private val _uiState = MutableStateFlow<ProductListUiState>(ProductListUiState.Loading)
     val uiState: StateFlow<ProductListUiState> = _uiState.asStateFlow()
 
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
     init {
-        loadInitialProducts()
+        viewModelScope.launch {
+            _searchQuery
+                .debounce(400L)
+                .distinctUntilChanged()
+                .collectLatest { query ->
+                    if (query.isBlank()) {
+                        loadInitialProducts()
+                    } else {
+                        search(query.trim())
+                    }
+                }
+        }
+    }
+
+    fun onSearchQueryChanged(newQuery: String) {
+        _searchQuery.value = newQuery
     }
 
     fun loadInitialProducts() {
@@ -45,13 +68,41 @@ class ProductListViewModel(
         }
     }
 
+    fun search(query: String) {
+        viewModelScope.launch {
+            _uiState.value = ProductListUiState.Loading
+
+            val result = repository.searchProducts(query = query, limit = PAGE_SIZE, skip = 0)
+            result.onSuccess { response ->
+                if (response.products.isEmpty()) {
+                    _uiState.value = ProductListUiState.Empty
+                } else {
+                    _uiState.value = ProductListUiState.Success(
+                        products = response.products,
+                        isPaginating = false,
+                        endReached = true
+                    )
+                }
+            }.onFailure { throwable ->
+                _uiState.value = ProductListUiState.Error(
+                    message = throwable.localizedMessage ?: "Failed to search products"
+                )
+            }
+        }
+    }
+
     fun retry() {
-        loadInitialProducts()
+        val query = _searchQuery.value
+        if (query.isBlank()) {
+            loadInitialProducts()
+        } else {
+            search(query.trim())
+        }
     }
 
     fun loadNextPage() {
         val currentState = _uiState.value
-        if (currentState !is ProductListUiState.Success || currentState.isPaginating || currentState.endReached) {
+        if (currentState !is ProductListUiState.Success || currentState.isPaginating || currentState.endReached || _searchQuery.value.isNotBlank()) {
             return
         }
 

@@ -8,6 +8,7 @@ import com.neurogine.catalog.ui.screens.list.ProductListViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -190,5 +191,93 @@ class ProductListViewModelTest {
         val state = viewModel.uiState.value as ProductListUiState.Success
         assertEquals(20, state.products.size)
         assertFalse(state.isPaginating)
+    }
+
+    @Test
+    fun onSearchQueryChanged_debouncedSearch_triggersSearchOnQuery() = runTest(testDispatcher) {
+        val searchResults = listOf(createProduct(42))
+        var searchedQuery: String? = null
+
+        val fakeRepo = object : ProductRepository {
+            override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> =
+                Result.success(ProductResponse(products = emptyList(), total = 0, skip = 0, limit = 20))
+
+            override suspend fun getProductById(id: Int): Result<Product> = Result.failure(Exception())
+
+            override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> {
+                searchedQuery = query
+                return Result.success(ProductResponse(products = searchResults, total = 1, skip = 0, limit = 20))
+            }
+        }
+
+        val viewModel = ProductListViewModel(repository = fakeRepo)
+        advanceUntilIdle()
+
+        viewModel.onSearchQueryChanged("phone")
+        advanceTimeBy(300L)
+        // Not triggered yet at 300ms (debounce is 400ms)
+        assertEquals(null, searchedQuery)
+
+        advanceTimeBy(150L) // Now at 450ms
+        advanceUntilIdle()
+
+        assertEquals("phone", searchedQuery)
+        val state = viewModel.uiState.value
+        assertTrue(state is ProductListUiState.Success)
+        val successState = state as ProductListUiState.Success
+        assertEquals(1, successState.products.size)
+        assertEquals(42, successState.products[0].id)
+        assertTrue(successState.endReached)
+    }
+
+    @Test
+    fun onSearchQueryChanged_emptyQuery_loadsInitialProducts() = runTest(testDispatcher) {
+        var catalogLoaded = false
+        val fakeRepo = object : ProductRepository {
+            override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> {
+                catalogLoaded = true
+                return Result.success(ProductResponse(products = listOf(createProduct(1)), total = 1, skip = 0, limit = 20))
+            }
+
+            override suspend fun getProductById(id: Int): Result<Product> = Result.failure(Exception())
+
+            override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> =
+                Result.success(ProductResponse(products = listOf(createProduct(99)), total = 1, skip = 0, limit = 20))
+        }
+
+        val viewModel = ProductListViewModel(repository = fakeRepo)
+        advanceUntilIdle()
+
+        viewModel.onSearchQueryChanged("laptop")
+        advanceTimeBy(500L)
+        advanceUntilIdle()
+
+        catalogLoaded = false
+        viewModel.onSearchQueryChanged("")
+        advanceTimeBy(500L)
+        advanceUntilIdle()
+
+        assertTrue(catalogLoaded)
+    }
+
+    @Test
+    fun search_emptyResults_emitsEmptyState() = runTest(testDispatcher) {
+        val fakeRepo = object : ProductRepository {
+            override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> =
+                Result.success(ProductResponse(products = emptyList(), total = 0, skip = 0, limit = 20))
+
+            override suspend fun getProductById(id: Int): Result<Product> = Result.failure(Exception())
+
+            override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> =
+                Result.success(ProductResponse(products = emptyList(), total = 0, skip = 0, limit = 20))
+        }
+
+        val viewModel = ProductListViewModel(repository = fakeRepo)
+        advanceUntilIdle()
+
+        viewModel.search("nonexistent_item")
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value is ProductListUiState.Empty)
     }
 }
