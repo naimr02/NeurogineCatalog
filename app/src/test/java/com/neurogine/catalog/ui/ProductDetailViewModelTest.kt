@@ -1,8 +1,7 @@
 package com.neurogine.catalog.ui
 
+import com.neurogine.catalog.data.FakeProductRepository
 import com.neurogine.catalog.data.model.Product
-import com.neurogine.catalog.data.model.ProductResponse
-import com.neurogine.catalog.data.repository.ProductRepository
 import com.neurogine.catalog.ui.screens.detail.ProductDetailUiState
 import com.neurogine.catalog.ui.screens.detail.ProductDetailViewModel
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +17,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ProductDetailViewModelTest {
@@ -47,14 +45,9 @@ class ProductDetailViewModelTest {
 
     @Test
     fun loadProduct_success_emitsSuccessState() = runTest(testDispatcher) {
-        val fakeRepo = object : ProductRepository {
-            override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
-            override suspend fun getProductById(id: Int): Result<Product> = Result.success(sampleProduct)
-            override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
-        }
+        val repository = FakeProductRepository(initialProducts = listOf(sampleProduct))
 
-        val viewModel = ProductDetailViewModel(productId = 10, repository = fakeRepo)
-
+        val viewModel = ProductDetailViewModel(productId = 10, repository = repository)
         advanceUntilIdle()
 
         val state = viewModel.uiState.value
@@ -64,14 +57,12 @@ class ProductDetailViewModelTest {
 
     @Test
     fun loadProduct_failure_emitsErrorState() = runTest(testDispatcher) {
-        val fakeRepo = object : ProductRepository {
-            override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
-            override suspend fun getProductById(id: Int): Result<Product> = Result.failure(IOException("Server error"))
-            override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
+        val repository = FakeProductRepository().apply {
+            shouldReturnError = true
+            errorMessage = "Server error"
         }
 
-        val viewModel = ProductDetailViewModel(productId = 10, repository = fakeRepo)
-
+        val viewModel = ProductDetailViewModel(productId = 10, repository = repository)
         advanceUntilIdle()
 
         val state = viewModel.uiState.value
@@ -81,25 +72,16 @@ class ProductDetailViewModelTest {
 
     @Test
     fun retry_reloadsProduct() = runTest(testDispatcher) {
-        var shouldFail = true
-        val fakeRepo = object : ProductRepository {
-            override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
-            override suspend fun getProductById(id: Int): Result<Product> {
-                return if (shouldFail) {
-                    Result.failure(IOException("Timeout"))
-                } else {
-                    Result.success(sampleProduct)
-                }
-            }
-            override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
+        val repository = FakeProductRepository(initialProducts = listOf(sampleProduct)).apply {
+            shouldReturnError = true
+            errorMessage = "Timeout"
         }
 
-        val viewModel = ProductDetailViewModel(productId = 10, repository = fakeRepo)
-
+        val viewModel = ProductDetailViewModel(productId = 10, repository = repository)
         advanceUntilIdle()
         assertTrue(viewModel.uiState.value is ProductDetailUiState.Error)
 
-        shouldFail = false
+        repository.shouldReturnError = false
         viewModel.retry()
         advanceUntilIdle()
 
@@ -110,13 +92,9 @@ class ProductDetailViewModelTest {
 
     @Test
     fun provideFactory_createsViewModelInstance() {
-        val fakeRepo = object : ProductRepository {
-            override suspend fun getProducts(limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
-            override suspend fun getProductById(id: Int): Result<Product> = Result.success(sampleProduct)
-            override suspend fun searchProducts(query: String, limit: Int, skip: Int): Result<ProductResponse> = Result.failure(Exception())
-        }
+        val repository = FakeProductRepository(initialProducts = listOf(sampleProduct))
 
-        val factory = ProductDetailViewModel.provideFactory(productId = 10, repository = fakeRepo)
+        val factory = ProductDetailViewModel.provideFactory(productId = 10, repository = repository)
         val createdVm = factory.create(ProductDetailViewModel::class.java)
 
         assertNotNull(createdVm)
