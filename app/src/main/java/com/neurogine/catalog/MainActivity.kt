@@ -8,9 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.neurogine.catalog.ui.screens.list.ProductListScreen
-import com.neurogine.catalog.ui.screens.list.ProductListViewModel
+import com.neurogine.catalog.ui.navigation.AppNavHost
 import com.neurogine.catalog.ui.theme.NeurogineCatalogTheme
 
 class MainActivity : ComponentActivity() {
@@ -23,11 +21,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val viewModel: ProductListViewModel = viewModel()
-                    ProductListScreen(
-                        viewModel = viewModel,
-                        onProductClick = { /* Handled in future navigation step */ }
-                    )
+                    AppNavHost()
                 }
             }
         }
